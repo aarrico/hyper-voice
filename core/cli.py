@@ -1,7 +1,5 @@
-import shutil
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
 
 import typer
 
@@ -14,35 +12,29 @@ from .probe import probe_audio_streams, select_source_stream
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 
-def _check_binaries(ffmpeg_path: str, ffprobe_path: str) -> None:
-    missing = [
-        name
-        for name, path in (("ffmpeg", ffmpeg_path), ("ffprobe", ffprobe_path))
-        if shutil.which(path) is None
-    ]
-    if missing:
-        typer.echo(f"[✘] Required executable(s) not found on PATH: {', '.join(missing)}", err=True)
-        raise typer.Exit(code=1)
-
-
 def _collect_files(target: Path) -> list[Path]:
     if target.is_file():
         if target.suffix.lower() not in config.EXTENSIONS:
             typer.echo(f"[✘] Unsupported file type: {target.suffix}", err=True)
             raise typer.Exit(code=1)
         return [target]
-    return sorted(f for f in target.iterdir() if f.is_file() and f.suffix.lower() in config.EXTENSIONS)
+    return sorted(
+        f
+        for f in target.iterdir()
+        if f.is_file() and f.suffix.lower() in config.EXTENSIONS
+    )
 
 
 @app.command()
 def inspect(
-    path: Path = typer.Argument(..., exists=True, help="Video file or directory to inspect."),
-    language: str = typer.Option(config.PREFERRED_LANGUAGE, help="Preferred source-track language."),
-    ffmpeg_path: str = typer.Option(config.FFMPEG_PATH, help="Path to the ffmpeg executable."),
-    ffprobe_path: str = typer.Option(config.FFPROBE_PATH, help="Path to the ffprobe executable."),
+    path: Path = typer.Argument(
+        ..., exists=True, help="Video file or directory to inspect."
+    ),
+    language: str = typer.Option(
+        config.PREFERRED_LANGUAGE, help="Preferred source-track language."
+    ),
 ) -> None:
     """Probe files and print measured loudness stats without encoding anything."""
-    _check_binaries(ffmpeg_path, ffprobe_path)
     files = _collect_files(path)
     if not files:
         typer.echo(f"[✘] No supported video files found: {path}", err=True)
@@ -51,10 +43,10 @@ def inspect(
     had_failure = False
     for video in files:
         try:
-            streams = probe_audio_streams(video, ffprobe_path=ffprobe_path)
+            streams = probe_audio_streams(video)
             source = select_source_stream(streams, preferred_language=language)
             filter_chain = get_downmix_filter(source.get("channel_layout", ""))
-            stats = measure_loudness(video, source["index"], filter_chain, ffmpeg_path=ffmpeg_path)
+            stats = measure_loudness(video, source["index"], filter_chain)
             typer.echo(f"{video.name}: {stats}")
         except Exception as e:
             had_failure = True
@@ -66,29 +58,44 @@ def inspect(
 
 @app.command()
 def run(
-    path: Path = typer.Argument(..., exists=True, help="Video file or directory to process."),
-    output_dir: Optional[Path] = typer.Option(
+    path: Path = typer.Argument(
+        ..., exists=True, help="Video file or directory to process."
+    ),
+    output_dir: Path | None = typer.Option(
         None, help="Directory for boosted output (default: <input>/boosted_output)."
     ),
-    language: str = typer.Option(config.PREFERRED_LANGUAGE, help="Preferred source-track language."),
-    loudness_i: float = typer.Option(config.LOUDNORM_I, help="Target integrated loudness (LUFS)."),
-    true_peak: float = typer.Option(config.LOUDNORM_TP, help="True peak ceiling (dBTP)."),
+    language: str = typer.Option(
+        config.PREFERRED_LANGUAGE, help="Preferred source-track language."
+    ),
+    loudness_i: float = typer.Option(
+        config.LOUDNORM_I, help="Target integrated loudness (LUFS)."
+    ),
+    true_peak: float = typer.Option(
+        config.LOUDNORM_TP, help="True peak ceiling (dBTP)."
+    ),
     lra: float = typer.Option(config.LOUDNORM_LRA, help="Target loudness range."),
-    codec: str = typer.Option(config.NEW_TRACK_CODEC, help="Codec for the new boosted track."),
-    bitrate: str = typer.Option(config.NEW_TRACK_BITRATE, help="Bitrate for the new boosted track."),
-    workers: int = typer.Option(config.MAX_WORKERS, min=1, help="Max parallel ffmpeg jobs."),
-    overwrite: bool = typer.Option(False, help="Overwrite existing boosted output files."),
-    ffmpeg_path: str = typer.Option(config.FFMPEG_PATH, help="Path to the ffmpeg executable."),
-    ffprobe_path: str = typer.Option(config.FFPROBE_PATH, help="Path to the ffprobe executable."),
+    codec: str = typer.Option(
+        config.NEW_TRACK_CODEC, help="Codec for the new boosted track."
+    ),
+    bitrate: str = typer.Option(
+        config.NEW_TRACK_BITRATE, help="Bitrate for the new boosted track."
+    ),
+    workers: int = typer.Option(
+        config.MAX_WORKERS, min=1, help="Max parallel encode jobs."
+    ),
+    overwrite: bool = typer.Option(
+        False, help="Overwrite existing boosted output files."
+    ),
 ) -> None:
     """Downmix, boost, normalize, and mux a new dialogue-boosted audio track."""
-    _check_binaries(ffmpeg_path, ffprobe_path)
     files = _collect_files(path)
     if not files:
         typer.echo(f"[✘] No supported video files found: {path}", err=True)
         raise typer.Exit(code=1)
 
-    out_dir = output_dir or (path.parent / "boosted_output" if path.is_file() else path / "boosted_output")
+    out_dir = output_dir or (
+        path.parent / "boosted_output" if path.is_file() else path / "boosted_output"
+    )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     effective_workers = 1 if len(files) == 1 else workers
@@ -99,8 +106,6 @@ def run(
                 process_video,
                 video,
                 out_dir,
-                ffmpeg_path=ffmpeg_path,
-                ffprobe_path=ffprobe_path,
                 preferred_language=language,
                 target_i=loudness_i,
                 target_tp=true_peak,

@@ -15,4 +15,20 @@ def get_downmix_filter(channel_layout: str) -> str:
     """Returns a `pan`-based filter that folds the given source layout down to
     a discrete 5.1 bed, with the dialogue boost baked in. Falls back to a
     generic remix + boost for layouts we don't have an explicit mapping for."""
-    return DOWNMIX_TO_5_1.get(channel_layout, f"aformat=channel_layouts=5.1,{CENTER_BOOST}")
+    return DOWNMIX_TO_5_1.get(
+        channel_layout, f"aformat=channel_layouts=5.1,{CENTER_BOOST}"
+    )
+
+
+def link_filter_chain(graph, chain: str, source):
+    """Adds each comma-separated `name=args` filter in `chain` (the fallback
+    branch of get_downmix_filter is two filters, `aformat` then `pan`) to
+    `graph`, linking them in sequence after `source`. Returns the last
+    filter context, ready to link into whatever comes next."""
+    current = source
+    for spec in chain.split(","):
+        name, _, args = spec.partition("=")
+        ctx = graph.add(name, args)
+        current.link_to(ctx)
+        current = ctx
+    return current

@@ -1,7 +1,3 @@
-# Executables
-FFMPEG_PATH = "ffmpeg"
-FFPROBE_PATH = "ffprobe"
-
 # Constants
 EXTENSIONS = {".mkv", ".mp4", ".avi", ".mov", ".m4v"}
 COMMENTARY_KEYWORDS = ("commentary", "director", "cast")

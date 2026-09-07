@@ -2,8 +2,11 @@
 name = "hyper-voice"
 version = "0.1.0"
 description = "Boost muddy dialogue in movie/show rips via ffmpeg center-channel boost and loudness normalization."
-requires-python = ">=3.10"
-dependencies = ["typer>=0.12"]
+requires-python = ">=3.14"
+dependencies = [
+    "av>=17.1.0",
+    "typer>=0.12",
+]
 
 [project.scripts]
 hyper-voice = "core.cli:app"

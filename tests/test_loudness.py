@@ -1,9 +1,8 @@
-import subprocess
-from unittest.mock import patch
-
 import pytest
 
-from core.loudness import build_linear_loudnorm_filter, measure_loudness
+from core.loudness import _extract_json_stats, build_linear_loudnorm_filter, measure_loudness
+
+from conftest import requires_ffmpeg
 
 
 def test_build_linear_loudnorm_filter_maps_measure_keys_to_apply_keys():
@@ -23,19 +22,19 @@ def test_build_linear_loudnorm_filter_maps_measure_keys_to_apply_keys():
     assert "linear=true" in result
 
 
-def _fake_completed(stderr: str) -> subprocess.CompletedProcess:
-    return subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr=stderr)
+def test_extract_json_stats_parses_json_block_from_log_text():
+    text = 'some ffmpeg noise\n{"input_i": "-20.0", "input_tp": "-3.0"}\nmore noise'
+    assert _extract_json_stats(text, "video.mkv") == {"input_i": "-20.0", "input_tp": "-3.0"}
 
 
-def test_measure_loudness_parses_json_block_from_stderr():
-    stderr = 'some ffmpeg noise\n{"input_i": "-20.0", "input_tp": "-3.0"}\nmore noise'
-    with patch("subprocess.run", return_value=_fake_completed(stderr)):
-        stats = measure_loudness("video.mkv", 0, "anull")
-    assert stats == {"input_i": "-20.0", "input_tp": "-3.0"}
+def test_extract_json_stats_raises_clear_error_when_no_json_present():
+    text = "ffmpeg produced no loudnorm output at all"
+    with pytest.raises(RuntimeError, match="no measurement output"):
+        _extract_json_stats(text, "video.mkv")
 
 
-def test_measure_loudness_raises_clear_error_when_no_json_present():
-    stderr = "ffmpeg produced no loudnorm output at all"
-    with patch("subprocess.run", return_value=_fake_completed(stderr)):
-        with pytest.raises(RuntimeError, match="no measurement output"):
-            measure_loudness("video.mkv", 0, "anull")
+@requires_ffmpeg
+def test_measure_loudness_returns_stats_for_a_real_surround_clip(surround_clip):
+    stats = measure_loudness(surround_clip, 1, "pan=5.1|FL=FL|FR=FR|FC=1.25*FC|LFE=LFE|BL=0.85*BL|BR=0.85*BR")
+    assert "input_i" in stats
+    assert "target_offset" in stats

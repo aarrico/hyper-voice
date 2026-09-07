@@ -1,15 +1,27 @@
-import json
-import subprocess
 from pathlib import Path
+
+import av
 
 from . import config
 
 # ISO 639-2 (bibliographic) <-> ISO 639-1 pairs for languages media taggers
 # commonly disagree on. Unlisted codes just match themselves.
 _LANGUAGE_ALIAS_PAIRS = {
-    "eng": "en", "fre": "fr", "fra": "fr", "ger": "de", "deu": "de",
-    "spa": "es", "ita": "it", "por": "pt", "chi": "zh", "zho": "zh",
-    "jpn": "ja", "kor": "ko", "rus": "ru", "dut": "nl", "nld": "nl",
+    "eng": "en",
+    "fre": "fr",
+    "fra": "fr",
+    "ger": "de",
+    "deu": "de",
+    "spa": "es",
+    "ita": "it",
+    "por": "pt",
+    "chi": "zh",
+    "zho": "zh",
+    "jpn": "ja",
+    "kor": "ko",
+    "rus": "ru",
+    "dut": "nl",
+    "nld": "nl",
 }
 _LANGUAGE_ALIAS_PAIRS.update({v: k for k, v in list(_LANGUAGE_ALIAS_PAIRS.items())})
 
@@ -24,21 +36,24 @@ def language_aliases(language: str) -> set[str]:
     return aliases
 
 
-def probe_audio_streams(video: Path, *, ffprobe_path: str = config.FFPROBE_PATH) -> list[dict]:
-    """Returns ffprobe's audio stream entries (index, codec_name, profile,
-    channels, channel_layout, tags) in container order."""
-    cmd = [
-        ffprobe_path,
-        "-select_streams",
-        "a",
-        "-show_entries",
-        "stream=index,codec_name,profile,channels,channel_layout:stream_tags=title,language",
-        "-of",
-        "json",
-        str(video),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    return json.loads(result.stdout)["streams"]
+def probe_audio_streams(video: Path) -> list[dict]:
+    """Returns audio stream entries (index, codec_name, profile, channels,
+    channel_layout, tags) in container order, read directly via PyAV."""
+    with av.open(str(video)) as container:
+        return [
+            {
+                "index": stream.index,
+                "codec_name": stream.codec_context.name,
+                "profile": stream.profile,
+                "channels": stream.codec_context.channels,
+                # some PCM-in-MKV streams carry no explicit layout mask; PyAV
+                # then reports a generic "N channels" name that won't match
+                # any DOWNMIX_TO_5_1 key, which is the desired fallback.
+                "channel_layout": stream.layout.name if stream.layout else "",
+                "tags": dict(stream.metadata),
+            }
+            for stream in container.streams.audio
+        ]
 
 
 def _is_commentary(stream: dict) -> bool:
@@ -58,12 +73,15 @@ def _codec_tier(stream: dict) -> int:
     return 1
 
 
-def select_source_stream(streams: list[dict], *, preferred_language: str = config.PREFERRED_LANGUAGE) -> dict:
+def select_source_stream(
+    streams: list[dict], *, preferred_language: str = config.PREFERRED_LANGUAGE
+) -> dict:
     candidates = [s for s in streams if not _is_commentary(s)] or list(streams)
 
     aliases = language_aliases(preferred_language)
     preferred = [
-        s for s in candidates
+        s
+        for s in candidates
         if (s.get("tags", {}).get("language") or "").lower() in aliases
     ]
     pool = preferred or candidates
