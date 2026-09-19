@@ -103,11 +103,15 @@ def run(
         config.LOUDNORM_TP, help="True peak ceiling (dBTP)."
     ),
     lra: float = typer.Option(config.LOUDNORM_LRA, help="Target loudness range."),
-    codec: str = typer.Option(
-        config.NEW_TRACK_CODEC, help="Codec for the new boosted track."
+    codec: str | None = typer.Option(
+        None, help="Codec override for the new track (overrides profile)."
     ),
-    bitrate: str = typer.Option(
-        config.NEW_TRACK_BITRATE, help="Bitrate for the new boosted track."
+    bitrate: str | None = typer.Option(
+        None, help="Bitrate override for the new track (overrides profile)."
+    ),
+    profile: str = typer.Option(
+        config.DEFAULT_PROFILE,
+        help="Output profile: compatible (E-AC-3) or archival (FLAC).",
     ),
     workers: int = typer.Option(
         config.MAX_WORKERS, min=1, help="Max parallel encode jobs."
@@ -148,6 +152,7 @@ def run(
                 target_i=loudness_i,
                 target_tp=true_peak,
                 target_lra=lra,
+                profile=profile,
                 new_track_codec=codec,
                 new_track_bitrate=bitrate,
                 overwrite=overwrite,
@@ -160,7 +165,7 @@ def run(
         for future in as_completed(futures):
             result = future.result()
             typer.echo(result)
-            if result.startswith("[✘]"):
+            if result.failed:
                 had_failure = True
 
     if had_failure:

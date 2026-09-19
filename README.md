@@ -36,6 +36,12 @@ Both commands accept either a single video file or a directory. A directory is s
 
 `inspect` is read-only — use it first to see which source track will be picked and what loudness stats will drive normalization, before committing to an encode.
 
+`run` defaults to the `compatible` profile: a 48 kHz, 640 kb/s E-AC-3 5.1
+track intended for TV/eARC/soundbar playback. Use `--profile archival` for
+48 kHz FLAC, which preserves the processed PCM but may not play as
+multichannel audio through every HDMI/eARC path. `--codec` and `--bitrate`
+override the profile's codec and bitrate exactly.
+
 ### Output
 
 `run` writes to `<input_dir>/boosted_output/<name>_<input-extension>_boosted.mkv` by default (override with `--output-dir`). The input extension prevents `Movie.mkv` and `Movie.mp4` from colliding. The new file has every original stream copied untouched plus one new encoded audio track appended at the end. Existing output is skipped, not overwritten, unless you pass `--overwrite`. If a directory has multiple files, one bad file doesn't abort the batch — the batch exits non-zero at the end if anything failed.
@@ -50,8 +56,9 @@ Mono/stereo-only inputs fail clearly by default rather than silently producing a
 --loudness-i   FLOAT   Target integrated loudness (LUFS). [default: -16.0]
 --true-peak    FLOAT   True peak ceiling (dBTP). [default: -1.5]
 --lra          FLOAT   Target loudness range. [default: 11.0]
---codec        TEXT    Codec for the new boosted track. [default: configured value]
---bitrate      TEXT    Bitrate for the new boosted track. [default: 448k]
+--profile      TEXT    Output profile: compatible (E-AC-3) or archival (FLAC).
+--codec        TEXT    Codec override for the new track.
+--bitrate      TEXT    Bitrate override for the new track.
 --workers      INT     Max parallel ffmpeg jobs. [default: 4]
 --overwrite             Overwrite existing boosted output files.
 --source-track INT     Exact input audio stream index to use.
@@ -70,8 +77,8 @@ uv run hyper-voice run /media/show/season-1 --language jpn --workers 6
 # Louder target loudness, re-encode files that already have boosted_output
 uv run hyper-voice run /media/movie.mkv --loudness-i -14 --overwrite
 
-# Point at non-PATH ffmpeg/ffprobe binaries
-uv run hyper-voice inspect /media/movie.mkv --ffmpeg-path /opt/ffmpeg/bin/ffmpeg --ffprobe-path /opt/ffmpeg/bin/ffprobe
+# Create a lossless representation of the processed PCM
+uv run hyper-voice run /media/movie.mkv --profile archival
 ```
 
 ## How source track selection works

@@ -1,4 +1,6 @@
 import time
+from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,15 +11,48 @@ from .filters import get_downmix_filter, link_filter_chain
 from .loudness import build_linear_loudnorm_filter, measure_loudness
 from .probe import probe_audio_streams, select_source_stream
 
-# Codecs that cannot be encoded by standard native FFmpeg encoders
-UNENCODABLE_CODECS = {"truehd", "dts", "dtshd", "mlp"}
-
 # Maximum standard bitrates for lossy surround encoders
 MAX_CODEC_BITRATES = {
     "ac3": 640_000,
     "eac3": 1_024_000,
     "aac": 768_000,
 }
+
+
+class ProcessStatus(StrEnum):
+    FINISHED = "finished"
+    SKIPPED = "skipped"
+    FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class ProcessError:
+    """A recoverable per-file error, safe for callers to inspect programmatically."""
+
+    kind: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ProcessResult:
+    """Machine-readable outcome of processing one input video."""
+
+    status: ProcessStatus
+    video: Path
+    elapsed_seconds: float = 0.0
+    output_path: Path | None = None
+    error: ProcessError | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self.status is ProcessStatus.FAILED
+
+    def __str__(self) -> str:
+        if self.status is ProcessStatus.FINISHED:
+            return f"[✔] Finished: {self.video.name} ({self.elapsed_seconds:.2f}s)"
+        if self.status is ProcessStatus.SKIPPED:
+            return f"[✘] Skipped ({self.error.message}): {self.video.name}"
+        return f"[✘] Failed: {self.video.name}: {self.error.message}"
 
 
 def output_path_for(video: Path, output_dir: Path) -> Path:
@@ -71,19 +106,17 @@ def _is_source_lossless(source_stream: av.stream.Stream) -> bool:
 
 def _resolve_codec_params(
     source_stream: av.stream.Stream,
-    fallback_codec: str,
-    fallback_bitrate: str,
+    target_codec: str,
+    target_bitrate: str | None,
+    target_sample_rate: int,
 ) -> tuple[str, int, int, str, str]:
     """Resolve encoder settings while honoring the caller's codec exactly."""
     codec_context = source_stream.codec_context
     src_codec = (codec_context.name or "").lower()
-    src_rate = codec_context.sample_rate or 48000
-    src_bitrate = codec_context.bit_rate or 0
-
-    target_codec = fallback_codec.lower()
+    target_codec = target_codec.lower()
 
     if target_codec == "flac":
-        sample_rate = _encoder_sample_rate(target_codec, src_rate)
+        sample_rate = _encoder_sample_rate(target_codec, target_sample_rate)
         sample_format = _encoder_sample_format(target_codec)
         return (
             target_codec,
@@ -93,18 +126,18 @@ def _resolve_codec_params(
             "Explicit FLAC output (lossless processed PCM)",
         )
 
-    sample_rate = _encoder_sample_rate(target_codec, src_rate)
+    sample_rate = _encoder_sample_rate(target_codec, target_sample_rate)
     sample_format = _encoder_sample_format(target_codec)
-
-    parsed_fallback = _parse_bitrate(fallback_bitrate)
-    max_allowed = MAX_CODEC_BITRATES.get(target_codec, 1_536_000)
-
-    if src_bitrate > 0:
-        bitrate = min(max_allowed, max(int(src_bitrate * 1.25), parsed_fallback))
-        reason = f"Explicit {target_codec} output; source is {src_codec} @ {_format_bitrate(src_bitrate)}; using {_format_bitrate(bitrate)}"
-    else:
-        bitrate = min(max_allowed, parsed_fallback)
-        reason = f"Explicit {target_codec} output from {src_codec} @ {_format_bitrate(bitrate)}"
+    if target_bitrate is None:
+        raise ValueError(f"A bitrate is required for lossy codec '{target_codec}'")
+    bitrate = _parse_bitrate(target_bitrate)
+    max_allowed = MAX_CODEC_BITRATES.get(target_codec)
+    if max_allowed is not None and bitrate > max_allowed:
+        raise ValueError(
+            f"Bitrate {_format_bitrate(bitrate)} exceeds {target_codec}'s "
+            f"supported maximum of {_format_bitrate(max_allowed)}"
+        )
+    reason = f"{target_codec} output from {src_codec} @ {_format_bitrate(bitrate)}"
 
     return target_codec, sample_rate, bitrate, sample_format, reason
 
@@ -131,30 +164,53 @@ def process_video(
     target_i: float = config.LOUDNORM_I,
     target_tp: float = config.LOUDNORM_TP,
     target_lra: float = config.LOUDNORM_LRA,
-    new_track_codec: str = config.NEW_TRACK_CODEC,
-    new_track_bitrate: str = config.NEW_TRACK_BITRATE,
+    profile: str = config.DEFAULT_PROFILE,
+    new_track_codec: str | None = None,
+    new_track_bitrate: str | None = None,
     new_track_title: str = config.NEW_TRACK_TITLE,
     overwrite: bool = False,
     source_track: int | None = None,
     prefer_5_1: bool = False,
     allow_stereo: bool = False,
-) -> str:
+) -> ProcessResult:
     start_time = time.perf_counter()
 
     output_path = output_path_for(video, output_dir)
     temp_path = output_dir / f".{output_path.stem}.{uuid4().hex}.tmp.mkv"
 
     if output_path.exists() and not overwrite:
-        return f"[✘] Skipped (output exists): {video.name}"
+        return ProcessResult(
+            ProcessStatus.SKIPPED,
+            video,
+            output_path=output_path,
+            error=ProcessError("output_exists", "output exists"),
+        )
 
     print(f"\n[▶] Processing file: {video.name}")
 
     in_container = None
     out_container = None
     try:
+        try:
+            profile_defaults = config.OUTPUT_PROFILES[profile]
+        except KeyError as exc:
+            available = ", ".join(config.OUTPUT_PROFILES)
+            raise ValueError(
+                f"Unknown profile '{profile}'; choose one of: {available}"
+            ) from exc
+        target_codec = new_track_codec or profile_defaults.codec
+        target_bitrate = (
+            new_track_bitrate
+            if new_track_bitrate is not None
+            else profile_defaults.bitrate
+        )
         streams = probe_audio_streams(video)
         if not streams:
-            return f"[✘] No audio streams found: {video.name}"
+            return ProcessResult(
+                ProcessStatus.FAILED,
+                video,
+                error=ProcessError("no_audio_streams", "No audio streams found"),
+            )
 
         source = select_source_stream(
             streams,
@@ -221,17 +277,22 @@ def process_video(
 
             # Resolve output encoder options
             (
-                target_codec,
+                encoder_codec,
                 sample_rate,
                 bitrate,
                 sample_format,
                 decision_reason,
-            ) = _resolve_codec_params(source_stream, new_track_codec, new_track_bitrate)
+            ) = _resolve_codec_params(
+                source_stream,
+                target_codec,
+                target_bitrate,
+                profile_defaults.sample_rate,
+            )
 
             print("    ├─ Output Audio Track Specs:")
             print(f"    │  ├─ Strategy: {decision_reason}")
             print(
-                f"    │  ├─ Encoder: {target_codec} ({sample_format}, {sample_rate} Hz)"
+                f"    │  ├─ Encoder: {encoder_codec} ({sample_format}, {sample_rate} Hz)"
             )
             print(f"    │  └─ Bitrate: {_format_bitrate(bitrate)}")
 
@@ -250,7 +311,7 @@ def process_video(
             graph.configure()
 
             new_stream = out_container.add_stream(
-                target_codec, rate=sample_rate, layout="5.1"
+                encoder_codec, rate=sample_rate, layout="5.1"
             )
             if bitrate > 0:
                 new_stream.codec_context.bit_rate = bitrate
@@ -292,7 +353,9 @@ def process_video(
 
         elapsed = time.perf_counter() - start_time
         print(f"    └─ [✔] Successfully finished in {elapsed:.2f}s")
-        return f"[✔] Finished: {video.name} ({elapsed:.2f}s)"
+        return ProcessResult(
+            ProcessStatus.FINISHED, video, elapsed, output_path=output_path
+        )
 
     except Exception as e:  # noqa: BLE001
         if out_container is not None:
@@ -308,4 +371,9 @@ def process_video(
         temp_path.unlink(missing_ok=True)
         elapsed = time.perf_counter() - start_time
         print(f"    └─ [✘] Failed after {elapsed:.2f}s: {e}")
-        return f"[✘] Failed: {video.name}: {e}"
+        return ProcessResult(
+            ProcessStatus.FAILED,
+            video,
+            elapsed,
+            error=ProcessError(type(e).__name__, str(e)),
+        )
