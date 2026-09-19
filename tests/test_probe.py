@@ -1,4 +1,12 @@
-from core.probe import _codec_tier, _is_commentary, language_aliases, select_source_stream
+import pytest
+
+from core.probe import (
+    SourceSelectionError,
+    _codec_tier,
+    _is_commentary,
+    language_aliases,
+    select_source_stream,
+)
 
 
 def test_is_commentary_matches_keyword_in_title():
@@ -51,14 +59,24 @@ def test_select_source_stream_prefers_preferred_language():
 
 def test_select_source_stream_falls_back_when_no_language_match():
     streams = [
-        {"index": 0, "codec_name": "truehd", "channels": 8, "tags": {"language": "jpn"}},
+        {
+            "index": 0,
+            "codec_name": "truehd",
+            "channels": 8,
+            "tags": {"language": "jpn"},
+        },
     ]
     assert select_source_stream(streams, preferred_language="eng")["index"] == 0
 
 
 def test_select_source_stream_excludes_commentary_unless_all_are_commentary():
     streams = [
-        {"index": 0, "codec_name": "ac3", "channels": 6, "tags": {"title": "Commentary", "language": "eng"}},
+        {
+            "index": 0,
+            "codec_name": "ac3",
+            "channels": 6,
+            "tags": {"title": "Commentary", "language": "eng"},
+        },
         {"index": 1, "codec_name": "ac3", "channels": 6, "tags": {"language": "eng"}},
     ]
     assert select_source_stream(streams)["index"] == 1
@@ -66,14 +84,49 @@ def test_select_source_stream_excludes_commentary_unless_all_are_commentary():
 
 def test_select_source_stream_keeps_commentary_when_it_is_the_only_option():
     streams = [
-        {"index": 0, "codec_name": "ac3", "channels": 6, "tags": {"title": "Commentary", "language": "eng"}},
+        {
+            "index": 0,
+            "codec_name": "ac3",
+            "channels": 6,
+            "tags": {"title": "Commentary", "language": "eng"},
+        },
     ]
     assert select_source_stream(streams)["index"] == 0
 
 
-def test_select_source_stream_ranks_by_codec_tier_then_channels():
+def test_select_source_stream_prefers_surround_over_lossless_stereo():
     streams = [
-        {"index": 0, "codec_name": "ac3", "channels": 8, "tags": {"language": "eng"}},
-        {"index": 1, "codec_name": "truehd", "channels": 6, "tags": {"language": "eng"}},
+        {
+            "index": 0,
+            "codec_name": "truehd",
+            "channels": 2,
+            "tags": {"language": "eng"},
+        },
+        {"index": 1, "codec_name": "ac3", "channels": 6, "tags": {"language": "eng"}},
     ]
     assert select_source_stream(streams)["index"] == 1
+
+
+def test_select_source_stream_prefers_7_1_by_default_and_5_1_when_requested():
+    streams = [
+        {"index": 0, "codec_name": "ac3", "channels": 6, "tags": {"language": "eng"}},
+        {"index": 1, "codec_name": "ac3", "channels": 8, "tags": {"language": "eng"}},
+    ]
+    assert select_source_stream(streams)["index"] == 1
+    assert select_source_stream(streams, prefer_5_1=True)["index"] == 0
+
+
+def test_select_source_stream_requires_surround_by_default():
+    streams = [
+        {"index": 0, "codec_name": "flac", "channels": 2, "tags": {"language": "eng"}}
+    ]
+    with pytest.raises(SourceSelectionError, match="No surround"):
+        select_source_stream(streams)
+
+
+def test_select_source_stream_honors_explicit_stream_index():
+    streams = [
+        {"index": 2, "codec_name": "ac3", "channels": 6, "tags": {"language": "eng"}},
+        {"index": 5, "codec_name": "ac3", "channels": 8, "tags": {"language": "eng"}},
+    ]
+    assert select_source_stream(streams, source_track=2)["index"] == 2

@@ -44,7 +44,9 @@ def _make_clip(path, *, channel_layout: str, pan_expr: str) -> None:
 def surround_clip(tmp_path):
     """A tiny synthetic 5.1 clip (1s, mono sine spread across all 6 channels)."""
     path = tmp_path / "surround.mkv"
-    _make_clip(path, channel_layout="5.1", pan_expr="FL=c0|FR=c0|FC=c0|LFE=c0|BL=c0|BR=c0")
+    _make_clip(
+        path, channel_layout="5.1", pan_expr="FL=c0|FR=c0|FC=c0|LFE=c0|BL=c0|BR=c0"
+    )
     return path
 
 

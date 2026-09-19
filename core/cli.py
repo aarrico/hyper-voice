@@ -7,7 +7,7 @@ from . import config
 from .filters import get_downmix_filter
 from .loudness import measure_loudness
 from .pipeline import process_video
-from .probe import probe_audio_streams, select_source_stream
+from .probe import explain_source_candidates, probe_audio_streams, select_source_stream
 
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
@@ -33,6 +33,15 @@ def inspect(
     language: str = typer.Option(
         config.PREFERRED_LANGUAGE, help="Preferred source-track language."
     ),
+    source_track: int | None = typer.Option(
+        None, help="Exact input audio stream index to use."
+    ),
+    prefer_5_1: bool = typer.Option(
+        False, help="Prefer 5.1 over 7.1 when otherwise equivalent."
+    ),
+    allow_stereo: bool = typer.Option(
+        False, help="Permit a stereo/mono source (currently inspection only)."
+    ),
 ) -> None:
     """Probe files and print measured loudness stats without encoding anything."""
     files = _collect_files(path)
@@ -44,7 +53,27 @@ def inspect(
     for video in files:
         try:
             streams = probe_audio_streams(video)
-            source = select_source_stream(streams, preferred_language=language)
+            for candidate in explain_source_candidates(
+                streams,
+                preferred_language=language,
+                source_track=source_track,
+                prefer_5_1=prefer_5_1,
+                allow_stereo=allow_stereo,
+            ):
+                typer.echo(f"  stream #{candidate.stream['index']}: {candidate.reason}")
+            source = select_source_stream(
+                streams,
+                preferred_language=language,
+                source_track=source_track,
+                prefer_5_1=prefer_5_1,
+                allow_stereo=allow_stereo,
+            )
+            typer.echo(f"  selected: stream #{source['index']}")
+            if source.get("channels", 0) <= 2:
+                typer.echo(
+                    f"{video.name}: stereo/mono selected; no surround loudness analysis performed"
+                )
+                continue
             filter_chain = get_downmix_filter(source.get("channel_layout", ""))
             stats = measure_loudness(video, source["index"], filter_chain)
             typer.echo(f"{video.name}: {stats}")
@@ -86,6 +115,15 @@ def run(
     overwrite: bool = typer.Option(
         False, help="Overwrite existing boosted output files."
     ),
+    source_track: int | None = typer.Option(
+        None, help="Exact input audio stream index to use."
+    ),
+    prefer_5_1: bool = typer.Option(
+        False, help="Prefer 5.1 over 7.1 when otherwise equivalent."
+    ),
+    allow_stereo: bool = typer.Option(
+        False, help="Permit a stereo/mono source (not yet renderable)."
+    ),
 ) -> None:
     """Downmix, boost, normalize, and mux a new dialogue-boosted audio track."""
     files = _collect_files(path)
@@ -113,6 +151,9 @@ def run(
                 new_track_codec=codec,
                 new_track_bitrate=bitrate,
                 overwrite=overwrite,
+                source_track=source_track,
+                prefer_5_1=prefer_5_1,
+                allow_stereo=allow_stereo,
             ): video
             for video in files
         }

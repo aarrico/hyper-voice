@@ -1,14 +1,10 @@
-# pan-based downmix filters, keyed by source channel_layout. Each folds the
-# source down to a discrete 5.1 bed with the same center-channel boost baked
-# in (1.25*FC) so a listener hears dialogue over a soundbar. Edit the boost
-# multiplier here to change how aggressive the dialogue lift is.
 DOWNMIX_TO_5_1 = {
-    "5.1": "pan=5.1|FL=FL|FR=FR|FC=1.25*FC|LFE=LFE|BL=0.85*BL|BR=0.85*BR",
-    "5.1(side)": "pan=5.1|FL=FL|FR=FR|FC=1.25*FC|LFE=LFE|BL=0.85*SL|BR=0.85*SR",
-    "7.1": "pan=5.1|FL=FL|FR=FR|FC=1.25*FC|LFE=LFE|BL=0.6*BL+0.425*SL|BR=0.6*BR+0.425*SR",
-    "7.1(wide)": "pan=5.1|FL=0.85*FL+0.3*FLC|FR=0.85*FR+0.3*FRC|FC=1.25*FC|LFE=LFE|BL=0.85*BL|BR=0.85*BR",
+    "5.1": "pan=5.1|FL=FL|FR=FR|FC=1.3*FC|LFE=LFE|BL=0.85*BL|BR=0.85*BR",
+    "5.1(side)": "pan=5.1|FL=FL|FR=FR|FC=1.3*FC|LFE=LFE|BL=0.85*SL|BR=0.85*SR",
+    "7.1": "pan=5.1|FL=FL|FR=FR|FC=1.3*FC|LFE=LFE|BL=0.6*BL+0.475*SL|BR=0.6*BR+0.475*SR",
+    "7.1(wide)": "pan=5.1|FL=0.85*FL+0.35*FLC|FR=0.85*FR+0.35*FRC|FC=1.3*FC|LFE=LFE|BL=0.85*BL|BR=0.85*BR",
 }
-CENTER_BOOST = "pan=5.1|FL=FL|FR=FR|FC=1.25*FC|LFE=LFE|BL=0.85*BL|BR=0.85*BR"
+CENTER_BOOST = "pan=5.1|FL=FL|FR=FR|FC=1.3*FC|LFE=LFE|BL=0.85*BL|BR=0.85*BR"
 
 
 def get_downmix_filter(channel_layout: str) -> str:

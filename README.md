@@ -4,9 +4,11 @@ Fixes muddy dialogue in movie/show rips for playback on a Hisense AX3120Q soundb
 
 ## Requirements
 
-- Python >= 3.10
+- Python >= 3.14
 - [`uv`](https://docs.astral.sh/uv/)
-- `ffmpeg` and `ffprobe` on `PATH` (checked at startup — the CLI exits immediately if either is missing)
+
+The application uses PyAV's FFmpeg libraries in-process; it does not require
+`ffmpeg` or `ffprobe` executables at runtime.
 
 ## Install
 
@@ -36,9 +38,9 @@ Both commands accept either a single video file or a directory. A directory is s
 
 ### Output
 
-`run` writes to `<input_dir>/boosted_output/<name>_boosted.mkv` by default (override with `--output-dir`). The new file has every original stream copied untouched (`-map 0 -c copy`) plus one new encoded audio track appended at the end. Existing output is skipped, not overwritten, unless you pass `--overwrite`. If a directory has multiple files, one bad file doesn't abort the batch — the batch exits non-zero at the end if anything failed.
+`run` writes to `<input_dir>/boosted_output/<name>_<input-extension>_boosted.mkv` by default (override with `--output-dir`). The input extension prevents `Movie.mkv` and `Movie.mp4` from colliding. The new file has every original stream copied untouched plus one new encoded audio track appended at the end. Existing output is skipped, not overwritten, unless you pass `--overwrite`. If a directory has multiple files, one bad file doesn't abort the batch — the batch exits non-zero at the end if anything failed.
 
-Mono/stereo sources skip the downmix/boost/normalize steps entirely (nothing to boost) — output is a plain stream copy with no new track.
+Mono/stereo-only inputs fail clearly by default rather than silently producing a no-op copy. `--allow-stereo` permits selection for inspection, but stereo rendering is not implemented yet.
 
 ### Flags (`run`)
 
@@ -48,12 +50,13 @@ Mono/stereo sources skip the downmix/boost/normalize steps entirely (nothing to 
 --loudness-i   FLOAT   Target integrated loudness (LUFS). [default: -16.0]
 --true-peak    FLOAT   True peak ceiling (dBTP). [default: -1.5]
 --lra          FLOAT   Target loudness range. [default: 11.0]
---codec        TEXT    Codec for the new boosted track. [default: eac3]
+--codec        TEXT    Codec for the new boosted track. [default: configured value]
 --bitrate      TEXT    Bitrate for the new boosted track. [default: 448k]
 --workers      INT     Max parallel ffmpeg jobs. [default: 4]
 --overwrite             Overwrite existing boosted output files.
---ffmpeg-path  TEXT    Path to the ffmpeg executable. [default: ffmpeg]
---ffprobe-path TEXT    Path to the ffprobe executable. [default: ffprobe]
+--source-track INT     Exact input audio stream index to use.
+--prefer-5-1           Prefer 5.1 over 7.1 when otherwise equivalent.
+--allow-stereo          Permit a stereo/mono source (inspection only today).
 ```
 
 Run `uv run hyper-voice run --help` or `uv run hyper-voice inspect --help` for the full, current list — flags are the source of truth over this file.
@@ -75,14 +78,20 @@ uv run hyper-voice inspect /media/movie.mkv --ffmpeg-path /opt/ffmpeg/bin/ffmpeg
 
 1. Commentary tracks are excluded by title keyword match (`commentary`, `director`, `cast`) unless every track is commentary.
 2. Among what's left, tracks matching `--language` are preferred (handles the ISO 639-1/639-2 split, e.g. `eng` vs `en`).
-3. Among what's left, ranked by codec tier (lossless/PCM/DTS-MA beats everything else), then channel count.
+3. Among the language pool, discrete surround tracks are required and rank by channel count (7.1 before 5.1 by default); use `--prefer-5-1` to reverse that preference.
+4. Codec/fidelity tier and bitrate break remaining ties. Input stream order is retained for an exact tie.
 
 ## Development
 
 ```fish
 uv run pytest
+uv run ruff check .
+uv run ruff format --check .
+
+# Install the Git hook once per clone. It automatically fixes lint and format issues.
+uv run pre-commit install
 ```
 
 Pure-function unit tests run everywhere. Integration tests (`tests/test_pipeline.py`) are skipped automatically if `ffmpeg`/`ffprobe` aren't on `PATH`.
 
-See `CLAUDE.md` for package layout and pipeline internals.
+See `AGENTS.md` for package layout and pipeline internals.

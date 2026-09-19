@@ -5,3 +5,5 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+AGENTS.md
+IMPLEMENTATION_PLAN.md
