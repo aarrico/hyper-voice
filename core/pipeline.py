@@ -11,11 +11,14 @@ from .filters import (
     dialogue_settings,
     get_boost_filter,
     get_dialogue_remix_filter,
-    get_downmix_filter,
     link_dialogue_filter_graph,
     link_filter_chain,
 )
-from .loudness import build_linear_loudnorm_filter, measure_loudness
+from .loudness import (
+    build_linear_loudnorm_filter,
+    extract_normalization_mode,
+    measure_loudness,
+)
 from .probe import probe_audio_streams, select_source_stream
 
 # Maximum standard bitrates for lossy surround encoders
@@ -49,6 +52,7 @@ class ProcessResult:
     elapsed_seconds: float = 0.0
     output_path: Path | None = None
     error: ProcessError | None = None
+    loudnorm_mode: str | None = None
 
     @property
     def failed(self) -> bool:
@@ -219,6 +223,7 @@ def process_video(
 
     in_container = None
     out_container = None
+    log_capture = None
     try:
         try:
             profile_defaults = config.OUTPUT_PROFILES[profile]
@@ -287,12 +292,16 @@ def process_video(
             source_stream.codec_context.thread_type = "AUTO"
 
             layout = source_stream.layout.name if source_stream.layout else ""
-            downmix_chain = get_downmix_filter(layout)
             loudnorm_args = None
             dialogue_mode = processing_mode == "dialogue"
             if processing_mode == "precise":
-                filter_chain = downmix_chain
-                print(f"    ├─ Downmix Filter: {filter_chain}")
+                # Precise mode deliberately measures and renders the same
+                # dialogue chain before adding loudnorm as the final stage.
+                dialogue_mode = True
+                filter_chain = get_dialogue_remix_filter(layout)
+                print(f"    ├─ Dialogue Remix Filter: {filter_chain}")
+                print(f"    ├─ Center compression: {dialogue_settings()}")
+                print(f"    ├─ Pre-normalization limiter ceiling: {target_tp} dBTP")
                 print("    ├─ Measuring audio loudness (Pass 1)...")
 
                 stats = measure_loudness(
@@ -302,6 +311,7 @@ def process_video(
                     target_i=target_i,
                     target_tp=target_tp,
                     target_lra=target_lra,
+                    dialogue_mode=True,
                 )
 
                 print(
@@ -312,6 +322,10 @@ def process_video(
                 loudnorm_args = build_linear_loudnorm_filter(
                     stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
                 ).split("=", 1)[1]
+                print(
+                    "    ├─ Processing mode: precise "
+                    "(Pass 2 dialogue chain → two-pass loudnorm)"
+                )
             elif processing_mode == "boost":
                 filter_chain = get_boost_filter(layout, true_peak=target_tp)
                 print(f"    ├─ Boost Filter: {filter_chain}")
@@ -346,6 +360,14 @@ def process_video(
                 f"    │  ├─ Encoder: {encoder_codec} ({sample_format}, {sample_rate} Hz)"
             )
             print(f"    │  └─ Bitrate: {_format_bitrate(bitrate)}")
+
+            log_capture = None
+            logs = None
+            if loudnorm_args is not None:
+                av.logging.set_level(av.logging.INFO)
+                av.logging.set_skip_repeated(False)
+                log_capture = av.logging.Capture(local=True)
+                logs = log_capture.__enter__()
 
             graph = av.filter.Graph()
             abuf = graph.add_abuffer(template=source_stream)
@@ -408,6 +430,23 @@ def process_video(
             for packet in new_stream.encode(None):
                 out_container.mux(packet)
 
+        loudnorm_mode = None
+        if log_capture is not None:
+            # loudnorm emits its summary while its filter graph is torn down.
+            # Drop every PyAV reference before leaving the capture context.
+            graph = None
+            filter_ctx = None
+            loud_ctx = None
+            fmt_ctx = None
+            sink = None
+            abuf = None
+            log_capture.__exit__(None, None, None)
+            log_capture = None
+            loudnorm_mode = extract_normalization_mode(
+                "".join(msg for _level, _ctx, msg in logs), video
+            )
+            print(f"    ├─ Loudnorm normalization used: {loudnorm_mode}")
+
         out_container.close()
         in_container.close()
         temp_path.replace(output_path)
@@ -415,10 +454,16 @@ def process_video(
         elapsed = time.perf_counter() - start_time
         print(f"    └─ [✔] Successfully finished in {elapsed:.2f}s")
         return ProcessResult(
-            ProcessStatus.FINISHED, video, elapsed, output_path=output_path
+            ProcessStatus.FINISHED,
+            video,
+            elapsed,
+            output_path=output_path,
+            loudnorm_mode=loudnorm_mode,
         )
 
     except Exception as e:  # noqa: BLE001
+        if log_capture is not None:
+            log_capture.__exit__(None, None, None)
         if out_container is not None:
             try:
                 out_container.close()

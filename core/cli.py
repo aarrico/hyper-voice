@@ -4,7 +4,7 @@ from pathlib import Path
 import typer
 
 from . import config
-from .filters import get_downmix_filter
+from .filters import get_dialogue_remix_filter
 from .loudness import measure_loudness
 from .pipeline import process_video
 from .probe import explain_source_candidates, probe_audio_streams, select_source_stream
@@ -43,7 +43,7 @@ def inspect(
         False, help="Permit a stereo/mono source (currently inspection only)."
     ),
 ) -> None:
-    """Probe files and print measured loudness stats without encoding anything."""
+    """Probe files and measure the precise-mode dialogue chain without encoding."""
     files = _collect_files(path)
     if not files:
         typer.echo(f"[✘] No supported video files found: {path}", err=True)
@@ -74,9 +74,11 @@ def inspect(
                     f"{video.name}: stereo/mono selected; no surround loudness analysis performed"
                 )
                 continue
-            filter_chain = get_downmix_filter(source.get("channel_layout", ""))
-            stats = measure_loudness(video, source["index"], filter_chain)
-            typer.echo(f"{video.name}: {stats}")
+            filter_chain = get_dialogue_remix_filter(source.get("channel_layout", ""))
+            stats = measure_loudness(
+                video, source["index"], filter_chain, dialogue_mode=True
+            )
+            typer.echo(f"{video.name} (precise pre-normalization): {stats}")
         except Exception as e:
             had_failure = True
             typer.echo(f"[✘] Failed: {video.name}: {e}", err=True)

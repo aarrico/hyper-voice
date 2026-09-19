@@ -1,14 +1,34 @@
 import json
+import re
 from pathlib import Path
 
 import av
 
 from . import config
-from .filters import link_filter_chain
+from .filters import link_dialogue_filter_graph, link_filter_chain
+
+
+def extract_normalization_mode(text: str, video: Path) -> str:
+    """Return the normalization strategy that ``loudnorm`` actually used.
+
+    ``linear=true`` is a request, not a guarantee: FFmpeg falls back to its
+    dynamic algorithm when the measured program cannot meet the requested
+    targets with a single linear gain.  The filter's summary is authoritative.
+    """
+    match = re.search(r"Normalization Type:\s*(Linear|Dynamic)", text)
+    if match is None:
+        raise RuntimeError(f"loudnorm produced no normalization mode for {video}")
+    return match.group(1).lower()
 
 
 def _run_pan_loudnorm_pass(
-    video: Path, stream_index: int, filter_chain: str, loudnorm_args: str
+    video: Path,
+    stream_index: int,
+    filter_chain: str,
+    loudnorm_args: str,
+    *,
+    dialogue_mode: bool = False,
+    true_peak: float = config.LOUDNORM_TP,
 ):
     """Decodes the given stream through `filter_chain` (a `pan=...` string)
     into `loudnorm`, draining every filtered frame. Returns nothing useful by
@@ -21,10 +41,14 @@ def _run_pan_loudnorm_pass(
 
         graph = av.filter.Graph()
         abuf = graph.add_abuffer(template=stream)
-        pan_ctx = link_filter_chain(graph, filter_chain, abuf)
+        filter_ctx = link_filter_chain(graph, filter_chain, abuf)
+        if dialogue_mode:
+            filter_ctx = link_dialogue_filter_graph(
+                graph, filter_ctx, true_peak=true_peak
+            )
         loud_ctx = graph.add("loudnorm", loudnorm_args)
         sink = graph.add("abuffersink")
-        pan_ctx.link_to(loud_ctx)
+        filter_ctx.link_to(loud_ctx)
         loud_ctx.link_to(sink)
         graph.configure()
 
@@ -35,7 +59,7 @@ def _run_pan_loudnorm_pass(
         graph.push(None)
         _drain(graph)
 
-        del sink, loud_ctx, pan_ctx, abuf, graph
+        del sink, loud_ctx, filter_ctx, abuf, graph
 
 
 def _drain(graph: av.filter.Graph) -> None:
@@ -62,18 +86,27 @@ def measure_loudness(
     target_i: float = config.LOUDNORM_I,
     target_tp: float = config.LOUDNORM_TP,
     target_lra: float = config.LOUDNORM_LRA,
+    dialogue_mode: bool = False,
 ) -> dict:
-    """Runs `filter_chain` (the center-boost `pan` filter) into `loudnorm` in
-    analysis mode and returns the measured stats (input_i, input_tp,
-    input_lra, input_thresh, target_offset). Loudness is measured *after* the
-    center-channel boost, matching what the final encode pass will actually
-    hear, not the raw unboosted source."""
+    """Measure the audio emitted by the processing chain before loudnorm.
+
+    With ``dialogue_mode``, this includes the full documented chain: remix,
+    center-only compression and makeup, rejoin, and limiting.  Measuring that
+    exact signal keeps pass two's supplied stats valid for its render chain.
+    """
     loudnorm_args = f"I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json"
 
     av.logging.set_level(av.logging.INFO)
     av.logging.set_skip_repeated(False)
     with av.logging.Capture(local=True) as logs:
-        _run_pan_loudnorm_pass(video, stream_index, filter_chain, loudnorm_args)
+        _run_pan_loudnorm_pass(
+            video,
+            stream_index,
+            filter_chain,
+            loudnorm_args,
+            dialogue_mode=dialogue_mode,
+            true_peak=target_tp,
+        )
         text = "".join(msg for _level, _ctx, msg in logs)
 
     return _extract_json_stats(text, video)
@@ -86,10 +119,12 @@ def build_linear_loudnorm_filter(
     target_tp: float = config.LOUDNORM_TP,
     target_lra: float = config.LOUDNORM_LRA,
 ) -> str:
-    """Builds the loudnorm filter for the real encode pass, using stats from
-    measure_loudness() to do a precise linear correction instead of guessing
-    from a single pass. Note the measure-pass keys (input_i, input_tp, ...)
-    map to differently-named apply-pass options (measured_I, measured_TP, ...)."""
+    """Build the two-pass apply filter and request linear normalization.
+
+    FFmpeg can still select dynamic normalization when a linear correction
+    cannot satisfy the targets.  ``print_format=summary`` lets the caller
+    report the strategy FFmpeg actually selected after rendering.
+    """
     return (
         f"loudnorm=I={target_i}:TP={target_tp}:LRA={target_lra}"
         f":measured_I={stats['input_i']}"
@@ -97,5 +132,5 @@ def build_linear_loudnorm_filter(
         f":measured_LRA={stats['input_lra']}"
         f":measured_thresh={stats['input_thresh']}"
         f":offset={stats['target_offset']}"
-        ":linear=true"
+        ":linear=true:print_format=summary"
     )

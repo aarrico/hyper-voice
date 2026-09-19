@@ -42,6 +42,17 @@ def test_boost_mode_skips_loudness_analysis(surround_clip, tmp_path, monkeypatch
 
 
 @requires_ffmpeg
+def test_precise_mode_reports_the_loudnorm_strategy(surround_clip, tmp_path):
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    result = process_video(surround_clip, output_dir, processing_mode="precise")
+
+    assert result.status is ProcessStatus.FINISHED
+    assert result.loudnorm_mode in {"linear", "dynamic"}
+
+
+@requires_ffmpeg
 def test_dialogue_mode_preserves_a_signal_in_every_5_1_bed_channel(
     surround_clip, tmp_path
 ):

@@ -1,6 +1,6 @@
 # hyper-voice
 
-Fixes muddy dialogue in movie/show rips for playback on a Hisense AX3120Q soundbar (or any setup where the center channel is too quiet). Probes a video's audio streams, picks the best source track, downmixes it to 5.1 with a center-channel boost, applies two-pass loudness normalization, and muxes the result as a **new** audio track alongside the originals — nothing existing is re-encoded or removed.
+Fixes muddy dialogue in movie/show rips for playback on a Hisense AX3120Q soundbar (or any setup where the center channel is too quiet). It probes a video's audio streams, picks the best source track, remixes it to 5.1, and muxes the processed result as a **new** audio track alongside the originals — nothing existing is re-encoded or removed. The `precise` mode adds two-pass EBU R128 loudness normalization to the dialogue chain.
 
 ## Requirements
 
@@ -25,7 +25,8 @@ uv run hyper-voice --help
 ## Usage
 
 ```fish
-# Dry run: probe audio streams, print measured loudness, encode nothing
+# Dry run: probe audio streams and measure the precise-mode dialogue chain
+# before loudnorm; encode nothing
 uv run hyper-voice inspect /path/to/video_or_folder
 
 # Default dialogue pipeline: preserve the full 5.1 bed, manage only the center,
@@ -54,7 +55,7 @@ effects can all be present in the source center channel.
 | --- | --- | --- | --- |
 | `dialogue` (default) | Neutral 5.1 remix → center-only compression → 1.15× center makeup → rejoin 5.1 → limiter | Most material; clearer quiet dialogue without making the whole mix louder | Center-channel effects are compressed too; this is not a dialogue extractor. |
 | `boost` | Layout remix with a fixed 1.3× center lift → limiter | The least processing and fastest render when a small lift is all that is needed | Quiet dialogue and loud center effects receive the same fixed lift; there is no loudness normalization. |
-| `precise` | Existing boosted layout remix → two-pass EBU R128 `loudnorm` | Keeping a library at a more consistent loudness | Two complete decodes, slower processing, and no center-only compression yet. |
+| `precise` | Dialogue chain → two-pass EBU R128 `loudnorm` | Keeping a library at a more consistent loudness | Two complete decodes and slower processing; loudnorm may use dynamic normalization if linear correction cannot meet the requested targets. |
 
 ### Dialogue mode
 
@@ -81,11 +82,14 @@ channel's dynamic range or target a library-wide loudness level.
 ### Precise mode
 
 Choose `precise` when consistent output loudness is more important than render
-time. It first measures the existing center-boost remix, then renders a second
-pass using EBU R128 `loudnorm` targets (`--loudness-i`, `--true-peak`, and
-`--lra`). This is currently the legacy normalization path: it does **not** yet
-include dialogue mode's center-only compressor. Use `inspect` to view the
-source selection and loudness measurement without encoding.
+time. Pass 1 measures the exact dialogue chain — layout remix, center-only
+compression, 1.15× makeup, rejoin, and the pre-normalization limiter. Pass 2
+rebuilds that chain and applies EBU R128 `loudnorm` with the measured stats and
+the `--loudness-i`, `--true-peak`, and `--lra` targets. It requests linear
+normalization, but FFmpeg can correctly fall back to dynamic normalization when
+the measured signal cannot meet those targets with a single gain; `run` reports
+which strategy it actually used. Use `inspect` to view source selection and the
+same pre-normalization dialogue-chain measurement without encoding.
 
 `run` defaults to the `compatible` profile: a 48 kHz, 640 kb/s E-AC-3 5.1
 track intended for TV/eARC/soundbar playback. Use `--profile archival` for

@@ -4,6 +4,7 @@ from conftest import requires_ffmpeg
 from core.loudness import (
     _extract_json_stats,
     build_linear_loudnorm_filter,
+    extract_normalization_mode,
     measure_loudness,
 )
 
@@ -25,6 +26,19 @@ def test_build_linear_loudnorm_filter_maps_measure_keys_to_apply_keys():
     assert "measured_thresh=-30.0" in result
     assert "offset=1.0" in result
     assert "linear=true" in result
+    assert "print_format=summary" in result
+
+
+def test_extract_normalization_mode_reports_ffmpegs_actual_strategy():
+    assert (
+        extract_normalization_mode("Normalization Type:   Dynamic\n", "video.mkv")
+        == "dynamic"
+    )
+
+
+def test_extract_normalization_mode_rejects_an_incomplete_summary():
+    with pytest.raises(RuntimeError, match="no normalization mode"):
+        extract_normalization_mode("Input Integrated: -20.0 LUFS", "video.mkv")
 
 
 def test_extract_json_stats_parses_json_block_from_log_text():
