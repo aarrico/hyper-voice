@@ -1,6 +1,8 @@
 from array import array
+from concurrent.futures import ThreadPoolExecutor
 
 import av
+import pytest
 from conftest import requires_ffmpeg
 
 from core.pipeline import ProcessStatus, output_path_for, process_video
@@ -53,6 +55,27 @@ def test_precise_mode_reports_the_loudnorm_strategy(surround_clip, tmp_path):
 
 
 @requires_ffmpeg
+def test_concurrent_precise_renders_keep_their_loudnorm_measurements(
+    surround_clip, tagged_surround_clip, tmp_path
+):
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(
+                lambda video: process_video(
+                    video, output_dir, processing_mode="precise"
+                ),
+                (surround_clip, tagged_surround_clip),
+            )
+        )
+
+    assert all(result.status is ProcessStatus.FINISHED for result in results)
+    assert {result.loudnorm_mode for result in results} <= {"linear", "dynamic"}
+
+
+@requires_ffmpeg
 def test_dialogue_mode_preserves_a_signal_in_every_5_1_bed_channel(
     surround_clip, tmp_path
 ):
@@ -86,6 +109,45 @@ def test_dialogue_mode_preserves_a_signal_in_every_5_1_bed_channel(
                 abs(sample) > 100 for sample in samples[channel::6]
             )
     assert all(channel_has_signal)
+
+
+@requires_ffmpeg
+def test_boost_mode_preserves_standard_5_1_channel_routing(
+    distinct_channel_surround_clip, tmp_path
+):
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    result = process_video(
+        distinct_channel_surround_clip,
+        output_dir,
+        processing_mode="boost",
+        new_track_codec="flac",
+    )
+
+    assert result.status is ProcessStatus.FINISHED
+    assert result.output_path is not None
+    with av.open(str(result.output_path)) as container:
+        enhanced = container.streams.audio[-1]
+        frames = list(container.decode(enhanced))
+
+    samples_by_channel = [[] for _ in range(6)]
+    for frame in frames:
+        assert frame.format.name == "s16"
+        samples = array("h", bytes(frame.planes[0]))[: frame.samples * 6]
+        for channel in range(6):
+            samples_by_channel[channel].extend(samples[channel::6])
+
+    def zero_crossing_frequency(samples):
+        crossings = sum(
+            (before <= 0 < after) or (before >= 0 > after)
+            for before, after in zip(samples, samples[1:])
+        )
+        return crossings * 48_000 / (2 * len(samples))
+
+    expected_frequencies = (300, 400, 500, 100, 600, 700)
+    for samples, expected in zip(samples_by_channel, expected_frequencies, strict=True):
+        assert zero_crossing_frequency(samples) == pytest.approx(expected, abs=6)
 
 
 @requires_ffmpeg

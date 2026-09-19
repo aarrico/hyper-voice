@@ -1,3 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
+
 import pytest
 from conftest import requires_ffmpeg
 
@@ -53,6 +56,40 @@ def test_extract_json_stats_raises_clear_error_when_no_json_present():
     text = "ffmpeg produced no loudnorm output at all"
     with pytest.raises(RuntimeError, match="no measurement output"):
         _extract_json_stats(text, "video.mkv")
+
+
+def test_measure_loudness_serializes_its_global_ffmpeg_log_capture(monkeypatch):
+    active = 0
+    maximum_active = 0
+    state_lock = Lock()
+
+    class FakeCapture:
+        def __enter__(self):
+            return [(0, "loudnorm", '{"input_i": "-20.0"}')]
+
+        def __exit__(self, *_):
+            return False
+
+    def fake_pass(*_, **__):
+        nonlocal active, maximum_active
+        with state_lock:
+            active += 1
+            maximum_active = max(maximum_active, active)
+        # Give the other worker a chance to enter if capture is not locked.
+        Event().wait(0.05)
+        with state_lock:
+            active -= 1
+
+    monkeypatch.setattr("core.loudness.av.logging.Capture", lambda **_: FakeCapture())
+    monkeypatch.setattr("core.loudness._run_pan_loudnorm_pass", fake_pass)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(lambda _: measure_loudness("video.mkv", 0, "anull"), range(2))
+        )
+
+    assert maximum_active == 1
+    assert results == [{"input_i": "-20.0"}, {"input_i": "-20.0"}]
 
 
 @requires_ffmpeg

@@ -137,6 +137,22 @@ uv run hyper-voice run /media/movie.mkv --loudness-i -14 --overwrite
 uv run hyper-voice run /media/movie.mkv --profile archival
 ```
 
+### Benchmarking real media
+
+`benchmark` processes user-selected media and writes a local JSON report; it
+does not add media or benchmark data to the repository. It records end-to-end
+wall/CPU time, peak memory, input/output stream properties and sizes,
+processing speed, worker count, and the loudnorm strategy used.
+
+```fish
+uv run hyper-voice benchmark /media/movie.mkv --mode precise \
+  --output-dir /media/benchmarks/movie --results /media/benchmarks/movie/precise.json
+```
+
+Run the 5.1, 7.1/Atmos, and episode matrix on the actual storage device before
+choosing a worker default or backend. Playback and listening validation still
+requires the target TV/player/eARC/soundbar path and representative scenes.
+
 ## How source track selection works
 
 1. Commentary tracks are excluded by title keyword match (`commentary`, `director`, `cast`) unless every track is commentary.

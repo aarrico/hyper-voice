@@ -4,6 +4,7 @@ from pathlib import Path
 import typer
 
 from . import config
+from .benchmark import benchmark_videos
 from .filters import get_dialogue_remix_filter
 from .loudness import measure_loudness
 from .pipeline import process_video
@@ -176,6 +177,60 @@ def run(
                 had_failure = True
 
     if had_failure:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def benchmark(
+    path: Path = typer.Argument(
+        ..., exists=True, help="Video file or directory to benchmark."
+    ),
+    output_dir: Path | None = typer.Option(
+        None, help="Directory for benchmarked media output."
+    ),
+    results: Path | None = typer.Option(
+        None, help="JSON results path (default: <output-dir>/benchmark.json)."
+    ),
+    mode: str = typer.Option("precise", help="Processing mode to measure."),
+    profile: str = typer.Option(
+        config.DEFAULT_PROFILE, help="Output profile to benchmark."
+    ),
+    workers: int = typer.Option(
+        config.MAX_WORKERS, min=1, help="Concurrent files to process."
+    ),
+    overwrite: bool = typer.Option(
+        False, help="Overwrite prior benchmarked media output."
+    ),
+) -> None:
+    """Process real media and save local performance measurements as JSON."""
+    files = _collect_files(path)
+    if not files:
+        typer.echo(f"[✘] No supported video files found: {path}", err=True)
+        raise typer.Exit(code=1)
+    if mode not in config.PROCESSING_MODES:
+        available = ", ".join(config.PROCESSING_MODES)
+        typer.echo(f"[✘] Unknown processing mode '{mode}'; choose one of: {available}")
+        raise typer.Exit(code=1)
+
+    benchmark_dir = output_dir or (
+        path.parent / "benchmark_output"
+        if path.is_file()
+        else path / "benchmark_output"
+    )
+    results_path = results or benchmark_dir / "benchmark.json"
+    report = benchmark_videos(
+        files,
+        benchmark_dir,
+        results_path,
+        mode=mode,
+        profile=profile,
+        workers=workers,
+        overwrite=overwrite,
+    )
+    typer.echo(
+        f"[✔] Wrote benchmark results for {len(report['records'])} file(s): {results_path}"
+    )
+    if any(record["status"] == "failed" for record in report["records"]):
         raise typer.Exit(code=1)
 
 

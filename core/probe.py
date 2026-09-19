@@ -51,8 +51,8 @@ def language_aliases(language: str) -> set[str]:
 
 
 def probe_audio_streams(video: Path) -> list[dict]:
-    """Returns audio stream entries (index, codec_name, profile, channels,
-    channel_layout, tags) in container order, read directly via PyAV."""
+    """Returns audio stream entries (index, codec, rate, layout, tags) in
+    container order, read directly via PyAV."""
     with av.open(str(video)) as container:
         return [
             {
@@ -60,6 +60,7 @@ def probe_audio_streams(video: Path) -> list[dict]:
                 "codec_name": stream.codec_context.name,
                 "profile": stream.profile,
                 "channels": stream.codec_context.channels,
+                "sample_rate": stream.codec_context.sample_rate,
                 # some PCM-in-MKV streams carry no explicit layout mask; PyAV
                 # then reports a generic "N channels" name that won't match
                 # any DOWNMIX_TO_5_1 key, which is the desired fallback.

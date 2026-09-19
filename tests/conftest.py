@@ -40,6 +40,38 @@ def _make_clip(path, *, channel_layout: str, pan_expr: str) -> None:
     )
 
 
+def _make_distinct_channel_clip(path) -> None:
+    """Create a 5.1 fixture whose standard-position channels have unique tones."""
+    frequencies = (300, 400, 500, 100, 600, 700)
+    expressions = "|".join(f"0.08*sin(2*PI*{frequency}*t)" for frequency in frequencies)
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=160x120:rate=5:duration=1",
+            "-f",
+            "lavfi",
+            "-i",
+            f"aevalsrc={expressions}:c=5.1:s=48000:d=1",
+            "-map",
+            "0:v",
+            "-map",
+            "1:a",
+            "-c:v",
+            "mpeg4",
+            "-c:a",
+            "pcm_s16le",
+            "-shortest",
+            str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
 @pytest.fixture
 def surround_clip(tmp_path):
     """A tiny synthetic 5.1 clip (1s, mono sine spread across all 6 channels)."""
@@ -47,6 +79,14 @@ def surround_clip(tmp_path):
     _make_clip(
         path, channel_layout="5.1", pan_expr="FL=c0|FR=c0|FC=c0|LFE=c0|BL=c0|BR=c0"
     )
+    return path
+
+
+@pytest.fixture
+def distinct_channel_surround_clip(tmp_path):
+    """A 5.1 clip with tones for FL, FR, FC, LFE, BL, and BR respectively."""
+    path = tmp_path / "distinct-surround.mkv"
+    _make_distinct_channel_clip(path)
     return path
 
 

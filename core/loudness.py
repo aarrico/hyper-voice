@@ -1,11 +1,18 @@
 import json
 import re
 from pathlib import Path
+from threading import Lock
 
 import av
 
 from . import config
 from .filters import link_dialogue_filter_graph, link_filter_chain
+
+# PyAV exposes FFmpeg's process-global logging configuration.  The analysis
+# result is emitted only through that log, so overlapping captures could attach
+# a file's JSON to the wrong analysis.  Render work remains parallel; only the
+# first-pass capture is serialized.
+_LOUDNORM_ANALYSIS_LOCK = Lock()
 
 
 def extract_normalization_mode(text: str, video: Path) -> str:
@@ -96,18 +103,19 @@ def measure_loudness(
     """
     loudnorm_args = f"I={target_i}:TP={target_tp}:LRA={target_lra}:print_format=json"
 
-    av.logging.set_level(av.logging.INFO)
-    av.logging.set_skip_repeated(False)
-    with av.logging.Capture(local=True) as logs:
-        _run_pan_loudnorm_pass(
-            video,
-            stream_index,
-            filter_chain,
-            loudnorm_args,
-            dialogue_mode=dialogue_mode,
-            true_peak=target_tp,
-        )
-        text = "".join(msg for _level, _ctx, msg in logs)
+    with _LOUDNORM_ANALYSIS_LOCK:
+        av.logging.set_level(av.logging.INFO)
+        av.logging.set_skip_repeated(False)
+        with av.logging.Capture(local=True) as logs:
+            _run_pan_loudnorm_pass(
+                video,
+                stream_index,
+                filter_chain,
+                loudnorm_args,
+                dialogue_mode=dialogue_mode,
+                true_peak=target_tp,
+            )
+            text = "".join(msg for _level, _ctx, msg in logs)
 
     return _extract_json_stats(text, video)
 
