@@ -51,6 +51,39 @@ def surround_clip(tmp_path):
 
 
 @pytest.fixture
+def tagged_surround_clip(tmp_path):
+    """A surround fixture with tags and a default audio disposition."""
+    path = tmp_path / "tagged-surround.mkv"
+    _make_clip(
+        path, channel_layout="5.1", pan_expr="FL=c0|FR=c0|FC=c0|LFE=c0|BL=c0|BR=c0"
+    )
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(path),
+            "-map",
+            "0",
+            "-c",
+            "copy",
+            "-metadata",
+            "title=Fixture container title",
+            "-metadata:s:a:0",
+            "title=Original surround track",
+            "-metadata:s:a:0",
+            "language=eng",
+            "-disposition:a:0",
+            "default",
+            str(tmp_path / "tagged-output.mkv"),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return tmp_path / "tagged-output.mkv"
+
+
+@pytest.fixture
 def stereo_clip(tmp_path):
     """A tiny synthetic stereo clip (1s, mono sine duplicated to both channels)."""
     path = tmp_path / "stereo.mkv"

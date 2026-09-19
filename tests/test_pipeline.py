@@ -1,3 +1,4 @@
+import av
 from conftest import requires_ffmpeg
 
 from core.pipeline import ProcessStatus, output_path_for, process_video
@@ -19,6 +20,26 @@ def test_process_video_adds_boosted_track_for_surround_source(surround_clip, tmp
     boosted_streams = probe_audio_streams(output_path)
     assert len(boosted_streams) == len(original_streams) + 1
     assert boosted_streams[-1]["codec_name"] == "eac3"
+
+
+@requires_ffmpeg
+def test_process_video_preserves_original_metadata_and_disposition(
+    tagged_surround_clip, tmp_path
+):
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    result = process_video(tagged_surround_clip, output_dir)
+
+    assert result.status is ProcessStatus.FINISHED
+    assert result.output_path is not None
+    with av.open(str(result.output_path)) as container:
+        assert container.metadata["title"] == "Fixture container title"
+        original, enhanced = container.streams.audio
+        assert original.metadata["title"] == "Original surround track"
+        assert original.metadata["language"] == "eng"
+        assert original.disposition == 1
+        assert enhanced.disposition == 0
 
 
 @requires_ffmpeg

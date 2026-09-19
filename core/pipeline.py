@@ -156,6 +156,27 @@ def _drain(
             out_container.mux(packet)
 
 
+def _copy_container_metadata(
+    in_container: av.container.InputContainer,
+    out_container: av.container.OutputContainer,
+) -> None:
+    """Copy container-level tags that stream templating deliberately omits."""
+    out_container.metadata.update(in_container.metadata)
+
+
+def _copy_stream_properties(
+    source: av.stream.Stream, destination: av.stream.Stream
+) -> None:
+    """Copy remuxed-stream properties not retained by PyAV's stream template.
+
+    In particular, a track's disposition determines which original stream is
+    selected by default in a player.  Preserve it exactly for original streams;
+    the derived track is configured separately below.
+    """
+    destination.metadata.update(source.metadata)
+    destination.disposition = source.disposition
+
+
 def process_video(
     video: Path,
     output_dir: Path,
@@ -229,12 +250,14 @@ def process_video(
 
         in_container = av.open(str(video))
         out_container = av.open(str(temp_path), mode="w")
+        _copy_container_metadata(in_container, out_container)
 
-        # Keep every original stream (video, original audio tracks, subs) untouched
+        # Keep every original stream (video, audio, subtitles, attachments)
+        # untouched, including its tags and player-selection disposition.
         stream_map = {}
         for stream in in_container.streams:
             out_stream = out_container.add_stream_from_template(stream)
-            out_stream.metadata.update(stream.metadata)
+            _copy_stream_properties(stream, out_stream)
             stream_map[stream.index] = out_stream
 
         graph = None
@@ -313,6 +336,9 @@ def process_video(
             new_stream = out_container.add_stream(
                 encoder_codec, rate=sample_rate, layout="5.1"
             )
+            # The derived track is selectable but must not replace the user's
+            # existing default (for example, an original Atmos track).
+            new_stream.disposition = 0
             if bitrate > 0:
                 new_stream.codec_context.bit_rate = bitrate
             new_stream.metadata["title"] = new_track_title
