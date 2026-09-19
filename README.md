@@ -35,7 +35,7 @@ uv run hyper-voice run /path/to/video_or_folder
 # Faster one-pass center boost with a final limiter
 uv run hyper-voice run /path/to/video_or_folder --mode boost
 
-# Two-pass loudness normalization, after the current center boost chain
+# Legacy two-pass loudness normalization
 uv run hyper-voice run /path/to/video_or_folder --mode precise
 ```
 
@@ -44,12 +44,48 @@ Both commands accept either a single video file or a directory. A directory is s
 `inspect` is read-only — use it first to see which source track will be picked
 before committing to an encode.
 
-`dialogue` is the default mode. It is not speech isolation: it remixes to a
-complete 5.1 bed, applies conservative compression and 1.15× makeup gain only
-to the center path, then rejoins the unchanged front, LFE, and surround paths
-before a final limiter. Music, ambience, and effects therefore remain present.
-Use `boost` for the least invasive fixed lift, or `precise` when consistent
-library loudness matters more than processing speed.
+## Processing modes
+
+Every mode writes an additional selectable track and leaves the original audio
+streams intact. None is speech isolation: dialogue, music, ambience, and
+effects can all be present in the source center channel.
+
+| Mode | Processing | Best for | Tradeoff |
+| --- | --- | --- | --- |
+| `dialogue` (default) | Neutral 5.1 remix → center-only compression → 1.15× center makeup → rejoin 5.1 → limiter | Most material; clearer quiet dialogue without making the whole mix louder | Center-channel effects are compressed too; this is not a dialogue extractor. |
+| `boost` | Layout remix with a fixed 1.3× center lift → limiter | The least processing and fastest render when a small lift is all that is needed | Quiet dialogue and loud center effects receive the same fixed lift; there is no loudness normalization. |
+| `precise` | Existing boosted layout remix → two-pass EBU R128 `loudnorm` | Keeping a library at a more consistent loudness | Two complete decodes, slower processing, and no center-only compression yet. |
+
+### Dialogue mode
+
+`dialogue` is deliberately built to avoid a hollow, voices-only result. For a
+native 5.1 source it retains FL, FR, LFE, BL, and BR position-for-position,
+then splits out only FC for processing. FC receives a conservative 2:1
+compressor at −18 dBFS (20 ms attack, 250 ms release) and 1.15× makeup gain;
+the six channels are then rejoined before the final limiter. For 7.1 sources,
+the normal layout fold happens first.
+
+This preserves the rest of the mix, but it cannot distinguish spoken dialogue
+from music or effects authored in the center channel. The original track is
+always retained, so switch back to it for material where the altered mix is
+less desirable. The current preset is conservative but still needs real-scene
+A/B listening validation.
+
+### Boost mode
+
+Choose `boost` when the source mix only needs a quick, fixed center lift. It
+does one audio pass and the limiter catches peaks introduced by the remix. It
+is the fastest option, but it deliberately does not reduce the center
+channel's dynamic range or target a library-wide loudness level.
+
+### Precise mode
+
+Choose `precise` when consistent output loudness is more important than render
+time. It first measures the existing center-boost remix, then renders a second
+pass using EBU R128 `loudnorm` targets (`--loudness-i`, `--true-peak`, and
+`--lra`). This is currently the legacy normalization path: it does **not** yet
+include dialogue mode's center-only compressor. Use `inspect` to view the
+source selection and loudness measurement without encoding.
 
 `run` defaults to the `compatible` profile: a 48 kHz, 640 kb/s E-AC-3 5.1
 track intended for TV/eARC/soundbar playback. Use `--profile archival` for
@@ -116,5 +152,3 @@ uv run pre-commit install
 ```
 
 Pure-function unit tests run everywhere. Integration tests (`tests/test_pipeline.py`) are skipped automatically if `ffmpeg`/`ffprobe` aren't on `PATH`.
-
-See `AGENTS.md` for package layout and pipeline internals.
