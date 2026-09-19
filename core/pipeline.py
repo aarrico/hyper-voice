@@ -7,7 +7,14 @@ from uuid import uuid4
 import av
 
 from . import config
-from .filters import get_downmix_filter, link_filter_chain
+from .filters import (
+    dialogue_settings,
+    get_boost_filter,
+    get_dialogue_remix_filter,
+    get_downmix_filter,
+    link_dialogue_filter_graph,
+    link_filter_chain,
+)
 from .loudness import build_linear_loudnorm_filter, measure_loudness
 from .probe import probe_audio_streams, select_source_stream
 
@@ -193,6 +200,7 @@ def process_video(
     source_track: int | None = None,
     prefer_5_1: bool = False,
     allow_stereo: bool = False,
+    processing_mode: str = config.DEFAULT_PROCESSING_MODE,
 ) -> ProcessResult:
     start_time = time.perf_counter()
 
@@ -219,6 +227,11 @@ def process_video(
             raise ValueError(
                 f"Unknown profile '{profile}'; choose one of: {available}"
             ) from exc
+        if processing_mode not in config.PROCESSING_MODES:
+            available = ", ".join(config.PROCESSING_MODES)
+            raise ValueError(
+                f"Unknown processing mode '{processing_mode}'; choose one of: {available}"
+            )
         target_codec = new_track_codec or profile_defaults.codec
         target_bitrate = (
             new_track_bitrate
@@ -273,30 +286,45 @@ def process_video(
             source_stream.codec_context.thread_count = 0
             source_stream.codec_context.thread_type = "AUTO"
 
-            filter_chain = get_downmix_filter(
-                source_stream.layout.name if source_stream.layout else ""
-            )
-            print(f"    ├─ Downmix Filter: {filter_chain}")
-            print("    ├─ Measuring audio loudness (Pass 1)...")
+            layout = source_stream.layout.name if source_stream.layout else ""
+            downmix_chain = get_downmix_filter(layout)
+            loudnorm_args = None
+            dialogue_mode = processing_mode == "dialogue"
+            if processing_mode == "precise":
+                filter_chain = downmix_chain
+                print(f"    ├─ Downmix Filter: {filter_chain}")
+                print("    ├─ Measuring audio loudness (Pass 1)...")
 
-            stats = measure_loudness(
-                video,
-                source["index"],
-                filter_chain,
-                target_i=target_i,
-                target_tp=target_tp,
-                target_lra=target_lra,
-            )
+                stats = measure_loudness(
+                    video,
+                    source["index"],
+                    filter_chain,
+                    target_i=target_i,
+                    target_tp=target_tp,
+                    target_lra=target_lra,
+                )
 
-            print(
-                f"    │  └─ Measured Stats: Input I={stats.get('input_i')} LUFS | "
-                f"TP={stats.get('input_tp')} dBTP | LRA={stats.get('input_lra')} LU | "
-                f"Offset={stats.get('target_offset')}"
-            )
-
-            loudnorm_args = build_linear_loudnorm_filter(
-                stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
-            ).split("=", 1)[1]
+                print(
+                    f"    │  └─ Measured Stats: Input I={stats.get('input_i')} LUFS | "
+                    f"TP={stats.get('input_tp')} dBTP | LRA={stats.get('input_lra')} LU | "
+                    f"Offset={stats.get('target_offset')}"
+                )
+                loudnorm_args = build_linear_loudnorm_filter(
+                    stats, target_i=target_i, target_tp=target_tp, target_lra=target_lra
+                ).split("=", 1)[1]
+            elif processing_mode == "boost":
+                filter_chain = get_boost_filter(layout, true_peak=target_tp)
+                print(f"    ├─ Boost Filter: {filter_chain}")
+                print(
+                    f"    ├─ Processing mode: boost (one pass, ceiling {target_tp} dBTP)"
+                )
+            else:
+                filter_chain = get_dialogue_remix_filter(layout)
+                print(
+                    "    ├─ Processing mode: dialogue (one pass, full 5.1 bed preserved)"
+                )
+                print(f"    │  ├─ Center compression: {dialogue_settings()}")
+                print(f"    │  └─ Final limiter ceiling: {target_tp} dBTP")
 
             # Resolve output encoder options
             (
@@ -321,15 +349,22 @@ def process_video(
 
             graph = av.filter.Graph()
             abuf = graph.add_abuffer(template=source_stream)
-            pan_ctx = link_filter_chain(graph, filter_chain, abuf)
-            loud_ctx = graph.add("loudnorm", loudnorm_args)
+            filter_ctx = link_filter_chain(graph, filter_chain, abuf)
+            if dialogue_mode:
+                filter_ctx = link_dialogue_filter_graph(
+                    graph, filter_ctx, true_peak=target_tp
+                )
             fmt_ctx = graph.add(
                 "aformat",
                 f"sample_fmts={sample_format}:sample_rates={sample_rate}:channel_layouts=5.1",
             )
             sink = graph.add("abuffersink")
-            pan_ctx.link_to(loud_ctx)
-            loud_ctx.link_to(fmt_ctx)
+            if loudnorm_args is not None:
+                loud_ctx = graph.add("loudnorm", loudnorm_args)
+                filter_ctx.link_to(loud_ctx)
+                loud_ctx.link_to(fmt_ctx)
+            else:
+                filter_ctx.link_to(fmt_ctx)
             fmt_ctx.link_to(sink)
             graph.configure()
 

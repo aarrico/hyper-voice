@@ -28,13 +28,28 @@ uv run hyper-voice --help
 # Dry run: probe audio streams, print measured loudness, encode nothing
 uv run hyper-voice inspect /path/to/video_or_folder
 
-# Full pipeline: downmix, boost, normalize, mux a new track, write *_boosted.mkv
+# Default dialogue pipeline: preserve the full 5.1 bed, manage only the center,
+# limit peaks, mux a new track, write *_boosted.mkv
 uv run hyper-voice run /path/to/video_or_folder
+
+# Faster one-pass center boost with a final limiter
+uv run hyper-voice run /path/to/video_or_folder --mode boost
+
+# Two-pass loudness normalization, after the current center boost chain
+uv run hyper-voice run /path/to/video_or_folder --mode precise
 ```
 
 Both commands accept either a single video file or a directory. A directory is scanned non-recursively for `.mkv`, `.mp4`, `.avi`, `.mov`, `.m4v` files.
 
-`inspect` is read-only — use it first to see which source track will be picked and what loudness stats will drive normalization, before committing to an encode.
+`inspect` is read-only — use it first to see which source track will be picked
+before committing to an encode.
+
+`dialogue` is the default mode. It is not speech isolation: it remixes to a
+complete 5.1 bed, applies conservative compression and 1.15× makeup gain only
+to the center path, then rejoins the unchanged front, LFE, and surround paths
+before a final limiter. Music, ambience, and effects therefore remain present.
+Use `boost` for the least invasive fixed lift, or `precise` when consistent
+library loudness matters more than processing speed.
 
 `run` defaults to the `compatible` profile: a 48 kHz, 640 kb/s E-AC-3 5.1
 track intended for TV/eARC/soundbar playback. Use `--profile archival` for
@@ -64,6 +79,7 @@ Mono/stereo-only inputs fail clearly by default rather than silently producing a
 --source-track INT     Exact input audio stream index to use.
 --prefer-5-1           Prefer 5.1 over 7.1 when otherwise equivalent.
 --allow-stereo          Permit a stereo/mono source (inspection only today).
+--mode          TEXT    Processing mode: boost, dialogue (center compression), or precise (two-pass loudnorm).
 ```
 
 Run `uv run hyper-voice run --help` or `uv run hyper-voice inspect --help` for the full, current list — flags are the source of truth over this file.

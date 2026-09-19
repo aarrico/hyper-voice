@@ -13,6 +13,22 @@ MAX_WORKERS = 4
 PREFERRED_LANGUAGE = "eng"
 NEW_TRACK_TITLE = "Dialogue Enhance (5.1)"
 
+# ``boost`` is a faster, one-pass center lift followed by a final limiter.
+# ``dialogue`` additionally manages the dynamic range of the center channel
+# only. ``precise`` retains the original two-pass loudness-normalized path.
+PROCESSING_MODES = ("boost", "dialogue", "precise")
+DEFAULT_PROCESSING_MODE = "dialogue"
+
+# A deliberately restrained starting point for the dialogue mode.  This is
+# not voice isolation: all of the other 5.1 channels are rejoined untouched
+# after the layout remix.  The compressor merely lets quiet center dialogue
+# come up without relying on a large fixed center boost.
+DIALOGUE_CENTER_THRESHOLD = -18.0  # dBFS
+DIALOGUE_CENTER_RATIO = 2.0
+DIALOGUE_CENTER_ATTACK = 20.0  # milliseconds
+DIALOGUE_CENTER_RELEASE = 250.0  # milliseconds
+DIALOGUE_CENTER_MAKEUP = 1.15
+
 
 @dataclass(frozen=True)
 class OutputProfile:

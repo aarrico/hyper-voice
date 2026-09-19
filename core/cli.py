@@ -128,8 +128,12 @@ def run(
     allow_stereo: bool = typer.Option(
         False, help="Permit a stereo/mono source (not yet renderable)."
     ),
+    mode: str = typer.Option(
+        config.DEFAULT_PROCESSING_MODE,
+        help="Processing mode: boost, dialogue (center compression), or precise (two-pass loudnorm).",
+    ),
 ) -> None:
-    """Downmix, boost, normalize, and mux a new dialogue-boosted audio track."""
+    """Add a dialogue-boosted audio track while preserving every original stream."""
     files = _collect_files(path)
     if not files:
         typer.echo(f"[✘] No supported video files found: {path}", err=True)
@@ -159,6 +163,7 @@ def run(
                 source_track=source_track,
                 prefer_5_1=prefer_5_1,
                 allow_stereo=allow_stereo,
+                processing_mode=mode,
             ): video
             for video in files
         }

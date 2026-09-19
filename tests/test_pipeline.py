@@ -1,3 +1,5 @@
+from array import array
+
 import av
 from conftest import requires_ffmpeg
 
@@ -20,6 +22,59 @@ def test_process_video_adds_boosted_track_for_surround_source(surround_clip, tmp
     boosted_streams = probe_audio_streams(output_path)
     assert len(boosted_streams) == len(original_streams) + 1
     assert boosted_streams[-1]["codec_name"] == "eac3"
+
+
+@requires_ffmpeg
+def test_boost_mode_skips_loudness_analysis(surround_clip, tmp_path, monkeypatch):
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    def analysis_must_not_run(*args, **kwargs):
+        raise AssertionError("boost mode must not run loudness analysis")
+
+    monkeypatch.setattr("core.pipeline.measure_loudness", analysis_must_not_run)
+    result = process_video(surround_clip, output_dir, processing_mode="boost")
+
+    assert result.status is ProcessStatus.FINISHED
+    assert result.output_path is not None
+    with av.open(str(result.output_path)) as container:
+        assert len(container.streams.audio) == 2
+
+
+@requires_ffmpeg
+def test_dialogue_mode_preserves_a_signal_in_every_5_1_bed_channel(
+    surround_clip, tmp_path
+):
+    output_dir = tmp_path / "out"
+    output_dir.mkdir()
+
+    result = process_video(
+        surround_clip,
+        output_dir,
+        processing_mode="dialogue",
+        new_track_codec="flac",
+    )
+
+    assert result.status is ProcessStatus.FINISHED
+    assert result.output_path is not None
+    with av.open(str(result.output_path)) as container:
+        enhanced = container.streams.audio[-1]
+        assert enhanced.layout.name == "5.1"
+        frames = list(container.decode(enhanced))
+
+    # The fixture supplies a tone to every source channel.  A dialogue graph
+    # must retain a complete bed, not leave only the center/voice path.
+    channel_has_signal = [False] * 6
+    for frame in frames:
+        # FLAC decodes to packed signed 16-bit PCM.  Inspect each interleaved
+        # channel without adding NumPy as an application dependency.
+        assert frame.format.name == "s16"
+        samples = array("h", bytes(frame.planes[0]))[: frame.samples * 6]
+        for channel in range(6):
+            channel_has_signal[channel] |= any(
+                abs(sample) > 100 for sample in samples[channel::6]
+            )
+    assert all(channel_has_signal)
 
 
 @requires_ffmpeg
